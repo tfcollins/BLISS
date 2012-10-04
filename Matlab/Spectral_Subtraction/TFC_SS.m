@@ -1,0 +1,126 @@
+% Create binary data symbols
+samples=1000;
+data = randi([0 1], samples, 1);
+% Create a DBPSK modulator System object and set the phase rotation to pi/4
+PhaseRotation=0;
+hModulator = comm.DBPSKModulator( PhaseRotation );
+% Modulate and plot the data
+modData = step(hModulator, data);
+scatterplot(modData)
+
+% upsamp_data is the signal after it has ben upsampled by 10
+upsamp_data = upsample(modData,10);
+
+% square root raised cosine pulse in the time domain
+syms=10;    %1/2 the length of srrc pulse in symbol durations
+beta=0.5;   %rolloff factor: beta=0 gives the sinc function
+P=10;       %oversampling factor = Symbol Period*sampling frequency
+t_off=0;    %phase (or timing) offset
+
+
+% pulse_srrc is the srrc pulse
+pulse_srrc = 10*srrc(syms,beta,P,t_off);
+
+% x_data is the signal convolved with the pulse shape
+x_data = conv(pulse_srrc,upsamp_data);
+
+% Carrier frequency and modulation information
+fo1 = 8e4;
+Fs = 2e5;  %samping frequency
+t = 1/Fs:1/Fs:length(x_data)/Fs;
+x_Modul = x_data.*cos(2*pi*t*fo1)';
+
+% A filter is applied to remove any unwanted information outside the
+% desired signal
+X_BB=x_Modul.';
+fl=600; 
+ff=[0 .1 .11 1];
+fa=[1 1 0 0];
+h=firpm(fl,ff,fa);
+X_filt = filter(h,1,X_BB);
+
+% x_SS_data is retrieved signal
+x_SS_data = 2*downsample(conv(X_filt, pulse_srrc),10)/100;
+
+numErrors = 0;
+
+for i=51:length(data)+50
+    if x_SS_data(i)>0
+        x_SS_data(i) = 1;
+    else
+        x_SS_data(i) = -1;
+    end
+    if x_SS_data(i)~=data(i-50)
+        numErrors=numErrors+1;
+    end
+end
+
+BitError = numErrors/length(data);
+
+break
+
+% Omega is the Phase of the desired signal
+Omega = angle(fft(x_Modul,precision));
+
+M_fft=fft(modData);
+% The signals are converted into PSD
+Y_psd = abs(Y_fft);
+M_psd = abs(M_fft);
+
+% Alpha and Beta are the values for the musical noise
+Alpha_MN = 30;  % values > 10
+Beta_MN = 0.2; % values betweeen 0.05 and 0.2;
+
+% Here the spectral subtraction takes place
+X_EST_psd = M_psd - Alpha_MN*Y_psd;
+
+% These loops reduce the impact of musical noise on the signal
+for i = 1:length(X_EST_psd)
+    if X_EST_psd(i)<0
+        X_EST_psd(i) = 0;
+    end
+end
+
+for i = 1:length(X_EST_psd)
+    if X_EST_psd(i) < Beta_MN*Y_psd(i)
+        X_EST_psd(i) = Beta_MN*Y_psd(i);
+    end
+end
+
+% Here X_SS is converted back into the frequency domain and time domain
+X_fft = (X_EST_psd).*exp(1i*Omega);
+x_SS = ifft(X_fft,precision);
+
+% The signal is modulated back down to base band
+t2 = 1/Fs:1/Fs:length(x_SS)/Fs;
+X_BB = 2*x_SS.*cos(2*pi*t2*fo1)';
+
+
+
+% Here the process is plotted
+figure(1),
+subplot(5,1,1),
+plot(upsamp_data),
+title('Original Data');
+subplot(5,1,2),
+plot(abs(fft(x_Modul))),
+title('Desired Signal');
+subplot(5,1,3),
+plot(abs(M_fft)),
+hold on
+plot(abs(fft(y_Modul)),'r')
+hold off;
+title('Combined Signals');
+subplot(5,1,4),
+plot(abs(X_fft)),
+title('Subtracted result');
+subplot(5,1,5),
+plot(real(x_SS_data(51:dataLength+50))),
+title('Time Domain Data w/ Pulse Shape');
+
+% This figure shows the retrieved signal in blue and the orriginal in red
+figure(2)
+plot(data,'r.')
+hold on
+plot(real(x_SS_data(51:dataLength+50)),'.')
+title('Comparison of Original and Retrieved Data');
